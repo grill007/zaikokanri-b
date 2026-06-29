@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>在庫管理B QR発行</title>
+
+  <style>
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;margin:0;padding:14px;background:#f6f7f9}
+    .card{max-width:560px;margin:10px auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 6px 16px rgba(0,0,0,.06)}
+    .row{display:flex;gap:10px}
+    .row>*{flex:1}
+    button{width:100%;padding:12px 14px;border-radius:12px;border:none;font-size:18px;font-weight:900;cursor:pointer}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .btn-sub{background:#e5e7eb;color:#111}
+    .btn-primary{background:#111;color:#fff}
+    .msg{margin-top:12px;padding:10px 12px;border-radius:12px;font-size:15px}
+    .msg.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;white-space:pre-wrap}
+    .msg.ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#eef2ff;font-size:14px;color:#3730a3;font-weight:800}
+    .muted{color:#666;font-size:13px}
+    label{display:block;margin-top:12px;font-weight:800}
+    input, select{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #e5e7eb;font-size:16px;box-sizing:border-box;background:#fff}
+    .hint{margin-top:6px}
+    .tiny{font-size:12px;color:#666}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+  </style>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</head>
+
+<body>
+  <div style="position:fixed;top:4px;right:6px;z-index:9999;font-size:12px;color:#666;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 6px;" id="versionLabel">github-pages-b-2026-06-26-01</div>
+  <div class="card">
+    <div class="row" style="align-items:center;">
+      <div class="pill">作業者：<span id="workerText">確認中…</span></div>
+      <button id="btnChangeWorker" class="btn-sub" style="max-width:180px;" type="button">作業者変更</button>
+    </div>
+
+    <div id="err" class="msg err" style="display:none;"></div>
+    <div id="ok" class="msg ok" style="display:none;"></div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="goMainBtn" class="btn-sub" type="button">← スキャンへ戻る</button>
+      <button id="reloadBtn" class="btn-sub" type="button">品目再読込</button>
+    </div>
+
+    <div id="dbg" class="muted" style="margin-top:12px;"></div>
+
+    <label for="itemSelect">品目（item_id / 商品名称）</label>
+    <select id="itemSelect"></select>
+    <div class="hint tiny" id="itemHint"></div>
+
+    <label for="qty">発行枚数（1〜<span id="qtyMaxLabel">132</span>）</label>
+    <input id="qty" inputmode="numeric" pattern="[0-9]*" placeholder="例：10" value="10">
+    <div class="hint tiny" id="qtyHint">※ A-one 28946（A4/44面）想定。最大132</div>
+    <div class="hint tiny" id="splitHint" style="display:none;color:#b45309;margin-top:4px;"></div>
+
+    <div class="row" style="margin-top:14px;">
+      <button id="issueBtn" class="btn-primary" type="button">PDFを作成してダウンロード</button>
+    </div>
+
+    <div class="tiny" style="margin-top:10px;">
+      PDFは端末にダウンロードされます。<span class="mono">Chrome / Safari</span> で開くと安定します。
+    </div>
+  </div>
+
+<script>
+(() => {
+  const LS_KEY = 'inventory_worker';
+
+  const workerText = document.getElementById('workerText');
+  const errBox = document.getElementById('err');
+  const okBox = document.getElementById('ok');
+  const dbg = document.getElementById('dbg');
+
+  const btnChangeWorker = document.getElementById('btnChangeWorker');
+  const goMainBtn = document.getElementById('goMainBtn');
+  const reloadBtn = document.getElementById('reloadBtn');
+
+  const itemSelect = document.getElementById('itemSelect');
+  const itemHint = document.getElementById('itemHint');
+  const qtyInput = document.getElementById('qty');
+  const qtyMaxLabel = document.getElementById('qtyMaxLabel');
+  const qtyHint = document.getElementById('qtyHint');
+  const issueBtn = document.getElementById('issueBtn');
+  let qrIssueMaxQty = 132;
+
+  dbg.textContent = 'page: qr / ' + location.href;
+
+  window.addEventListener('error', (e) => showErr('JS Error: ' + (e.message || e)));
+  window.addEventListener('unhandledrejection', (e) => showErr('Promise Error: ' + (e.reason?.message || e.reason || e)));
+
+  function showErr(msg){ errBox.style.display='block'; okBox.style.display='none'; errBox.textContent=String(msg||''); }
+  function showOk(msg){ okBox.style.display='block'; errBox.style.display='none'; okBox.textContent=String(msg||''); }
+  function clearMsg(){ errBox.style.display='none'; okBox.style.display='none'; }
+
+  function getSavedWorker(){
+    try{ return JSON.parse(localStorage.getItem(LS_KEY) || 'null'); }catch(e){ return null; }
+  }
+  function saveWorker(w){ localStorage.setItem(LS_KEY, JSON.stringify(w)); }
+  function clearWorker(){ localStorage.removeItem(LS_KEY); }
+
+  const splitHint = document.getElementById('splitHint');
+  const jsonpBatchLimit = Number((window.ZAIKO_B_CONFIG || {}).jsonpMaxQtyPerBatch || 0);
+
+  function applyClientSettings(res){
+    const gasMax = Number(res && res.qr_issue_max_qty);
+    if (Number.isFinite(gasMax) && gasMax >= 1) {
+      qrIssueMaxQty = Math.floor(gasMax);
+    }
+    // JSONP上限が設定されていればそちらを優先
+    if (jsonpBatchLimit >= 1 && jsonpBatchLimit < qrIssueMaxQty) {
+      qrIssueMaxQty = jsonpBatchLimit;
+      qtyMaxLabel.textContent = String(qrIssueMaxQty);
+      qtyHint.textContent = `※ A-one 28946（A4/44面）想定。1回あたり最大${qrIssueMaxQty}枚`;
+      splitHint.textContent = `${qrIssueMaxQty}枚を超える場合は複数回に分けて発行してください。`;
+      splitHint.style.display = 'block';
+    } else {
+      qtyMaxLabel.textContent = String(qrIssueMaxQty);
+      qtyHint.textContent = `※ A-one 28946（A4/44面）想定。最大${qrIssueMaxQty}`;
+      splitHint.style.display = 'none';
+    }
+  }
+
+  function loadClientSettings(){
+    google.script.run
+      .withSuccessHandler(applyClientSettings)
+      .withFailureHandler(() => applyClientSettings({ qr_issue_max_qty: qrIssueMaxQty }))
+      .getAppSettingsForClient();
+  }
+
+  loadClientSettings();
+
+  // ===== 作業者 =====
+  let workerCode = '';
+
+  (function initWorker(){
+    const params = new URL(location.href).searchParams;
+    const fromQuery = params.get('worker_code');
+    const saved = getSavedWorker();
+    const wc = fromQuery || saved?.code || '';
+
+    if (!wc) {
+      showErr('作業者情報がありません。ログインしてください。');
+      setTimeout(()=>navTo('index'), 500);
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || !res.ok) {
+          showErr(res?.message || '作業者確認に失敗しました。');
+          clearWorker();
+          setTimeout(()=>navTo('index'), 600);
+          return;
+        }
+        workerCode = res.worker.code;
+        workerText.textContent = `${res.worker.code} ${res.worker.name}`;
+        saveWorker({code: res.worker.code, name: res.worker.name});
+        showOk('作業者確認OK');
+        loadItems();
+      })
+      .withFailureHandler(err => showErr('サーバーエラー: ' + (err?.message || err)))
+      .validateWorkerCode(wc);
+  })();
+
+  btnChangeWorker.onclick = () => { clearWorker(); navTo('index'); };
+  goMainBtn.onclick = () => {
+    const w = getSavedWorker();
+    if (!w?.code) { showErr('作業者情報がありません。ログインしてください。'); setTimeout(()=>navTo('index'), 500); return; }
+    navTo('main', { worker_code: w.code });
+  };
+  reloadBtn.onclick = () => loadItems(true);
+
+  // ===== 品目読み込み =====
+  let itemList = [];
+
+  function renderItems(){
+    itemSelect.innerHTML = '';
+
+    if (!Array.isArray(itemList) || itemList.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '（品目がありません）';
+      itemSelect.appendChild(opt);
+      itemHint.textContent = '';
+      return;
+    }
+
+    for (const it of itemList) {
+      const id = String(it.item_id || '').trim();
+      const name = String(it.name || '').trim();
+      const kind = String(it.kind || '').trim();
+      if (!id) continue;
+
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = `${id} / ${name || '(名称未設定)'}${kind ? '（' + kind + '）' : ''}`;
+      itemSelect.appendChild(opt);
+    }
+
+    updateItemHint();
+  }
+
+  function updateItemHint(){
+    const id = itemSelect.value;
+    const it = itemList.find(x => String(x.item_id).trim() === id);
+    if (!it) { itemHint.textContent = ''; return; }
+    const name = String(it.name || '').trim();
+    const kind = String(it.kind || '').trim();
+    itemHint.textContent = `選択中：${id} / ${name || '(名称未設定)'}${kind ? '（' + kind + '）' : ''}`;
+  }
+
+  itemSelect.addEventListener('change', updateItemHint);
+
+  function loadItems(showToast=false){
+    clearMsg();
+    if (showToast) showOk('品目を再読込しています…');
+    issueBtn.disabled = true;
+
+    google.script.run
+      .withSuccessHandler(list => {
+        itemList = Array.isArray(list) ? list : [];
+        renderItems();
+        issueBtn.disabled = false;
+
+        if (showToast) showOk('品目を更新しました');
+        else showOk('品目を読み込みました');
+      })
+      .withFailureHandler(err => {
+        issueBtn.disabled = false;
+        showErr('品目マスタ取得に失敗: ' + (err?.message || err));
+      })
+      .getItemMasterForQr();
+  }
+
+  // ===== PDF発行 =====
+  function sanitizeQty(v){
+    const n = Number(String(v||'').trim());
+    if (!Number.isFinite(n)) return 0;
+    return Math.floor(n);
+  }
+
+  function downloadBase64Pdf_(filename, base64){
+    const bytes = atob(base64);
+    const len = bytes.length;
+    const buf = new Uint8Array(len);
+    for (let i=0;i<len;i++) buf[i] = bytes.charCodeAt(i);
+    const blob = new Blob([buf], {type:'application/pdf'});
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'labels.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(()=>URL.revokeObjectURL(url), 5000);
+  }
+
+  issueBtn.onclick = () => {
+    clearMsg();
+
+    if (!workerCode) { showErr('作業者確認が完了していません。少し待つか再ログインしてください。'); return; }
+
+    const itemId = String(itemSelect.value || '').trim();
+    if (!itemId) { showErr('品目を選択してください。'); return; }
+
+    const qty = sanitizeQty(qtyInput.value);
+    if (qty < 1 || qty > qrIssueMaxQty) { showErr(`枚数は 1〜${qrIssueMaxQty} の範囲で入力してください。`); return; }
+
+    issueBtn.disabled = true;
+    showOk('PDF生成中…（少し時間がかかることがあります）');
+
+    const payload = { worker_code: workerCode, item_id: itemId, qty };
+
+    google.script.run
+      .withSuccessHandler(res => {
+        issueBtn.disabled = false;
+
+        if (!res || !res.ok || !res.base64) {
+          showErr(res?.message || 'PDF生成に失敗しました。');
+          return;
+        }
+
+        showOk(`PDF生成OK：${res.count || qty}枚（${res.filename || 'labels.pdf'}）\nダウンロードを開始します…`);
+        try{
+          downloadBase64Pdf_(res.filename, res.base64);
+        }catch(e){
+          showErr('ダウンロード処理に失敗: ' + (e?.message || e));
+        }
+      })
+      .withFailureHandler(err => {
+        issueBtn.disabled = false;
+        showErr('サーバーエラー: ' + (err?.message || err));
+      })
+      .issueQrPdf(payload);
+  };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>在庫管理B 在庫確認</title>
+  <style>
+    :root{
+      --bg:#f6f7f9; --card:#fff; --text:#111; --muted:#667085; --border:#e5e7eb;
+      --radius:14px; --pad:14px;
+      --btn:#111; --btnText:#fff;
+      --chip:#eef2ff; --chipText:#3730a3;
+      --okbg:#ecfdf5; --ok:#065f46; --okbd:#a7f3d0;
+      --errbg:#fef2f2; --err:#991b1b; --errbd:#fecaca;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0; padding:12px;
+      font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
+      background:var(--bg); color:var(--text);
+    }
+    .card{
+      max-width:720px; margin:10px auto;
+      background:var(--card); border:1px solid var(--border);
+      border-radius:var(--radius); padding:var(--pad);
+      box-shadow:0 6px 16px rgba(0,0,0,.06);
+    }
+    h2{ margin:0 0 10px; font-size:20px; }
+    .muted{ color:var(--muted); font-size:13px; }
+    label{ display:block; margin-top:12px; font-weight:800; }
+    select, input, button{
+      width:100%; padding:12px 14px; margin-top:6px;
+      border-radius:12px; border:1px solid var(--border);
+      font-size:18px; background:#fff; outline:none;
+    }
+    button{
+      border:none; background:var(--btn); color:var(--btnText);
+      font-weight:900; cursor:pointer;
+    }
+    button:disabled{ opacity:.55; cursor:not-allowed; }
+    .row{ display:flex; gap:10px; }
+    .row > *{ flex:1; }
+    .chips{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .chip{
+      background:var(--chip); color:var(--chipText);
+      padding:8px 10px; border-radius:999px; font-weight:800;
+      font-size:13px; cursor:pointer; border:1px solid rgba(55,48,163,.15);
+    }
+    .msg{
+      margin-top:12px; padding:10px 12px; border-radius:12px;
+      font-size:14px; white-space:pre-wrap;
+    }
+    .msg.ok{ background:var(--okbg); color:var(--ok); border:1px solid var(--okbd); }
+    .msg.err{ background:var(--errbg); color:var(--err); border:1px solid var(--errbd); }
+    table{
+      width:100%; border-collapse:collapse; margin-top:12px;
+      font-size:15px;
+    }
+    th, td{
+      border-bottom:1px solid var(--border);
+      padding:10px 6px; text-align:left; vertical-align:top;
+    }
+    th{ font-size:12px; color:var(--muted); font-weight:900; }
+    .num{ text-align:right; font-variant-numeric: tabular-nums; }
+    .name{ font-weight:900; }
+    .small{ font-size:12px; color:var(--muted); margin-top:2px; }
+    .stickyBar{
+      position: sticky; top: 0;
+      background: rgba(246,247,249,.92);
+      backdrop-filter: blur(6px);
+      padding: 8px 0 2px;
+      z-index: 5;
+    }
+  </style>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</head>
+<body>
+  <div style="position:fixed;top:4px;right:6px;z-index:9999;font-size:12px;color:#666;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 6px;" id="versionLabel">github-pages-b-2026-06-26-01</div>
+
+<div class="card">
+  <div class="stickyBar">
+    <h2>在庫確認</h2>
+    <div class="muted" id="dbg">loading...</div>
+  </div>
+
+  <div id="msg" class="msg ok" style="display:none;"></div>
+
+  <label>品種</label>
+  <select id="kindSelect"></select>
+
+  <label>検索（商品名 / 品番 / item_id）</label>
+  <input id="q" placeholder="例：USB / TH-03 / 品番など" autocomplete="off">
+
+  <div class="chips" id="quickChips"></div>
+
+  <div class="row" style="margin-top:12px;">
+    <button id="btnReload" type="button">更新</button>
+    <button id="btnClear" type="button" style="background:#e5e7eb;color:#111;">クリア</button>
+    <button id="btnBack" type="button" style="background:#e5e7eb;color:#111;">← スキャンへ</button>
+  </div>
+
+  <table id="tbl" style="display:none;">
+    <thead>
+      <tr>
+        <th>商品</th>
+        <th class="num">在庫</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <div class="muted" style="margin-top:10px;">
+    ※ログインなし。数が多い前提なので、スマホでも軽いように「集計結果のみ」表示します。
+  </div>
+</div>
+
+<script>
+  const dbg = document.getElementById('dbg');
+  const msg = document.getElementById('msg');
+  const kindSelect = document.getElementById('kindSelect');
+  const qInput = document.getElementById('q');
+  const tbl = document.getElementById('tbl');
+  const tbody = document.getElementById('tbody');
+  const quickChips = document.getElementById('quickChips');
+
+  function show(type, text){
+    msg.className = 'msg ' + (type || 'ok');
+    msg.textContent = String(text || '');
+    msg.style.display = 'block';
+  }
+  function hideMsg(){ msg.style.display = 'none'; }
+
+  let masters = [];
+  let stocks = [];
+
+  dbg.textContent = 'page: stock / ' + location.href;
+
+  function render(){
+    const kind = kindSelect.value || '';
+    const q = (qInput.value || '').trim().toLowerCase();
+
+    let rows = stocks.filter(r => !kind || r.kind === kind);
+
+    if (q) {
+      rows = rows.filter(r => {
+        const s1 = (r.name || '').toLowerCase();
+        const s2 = (r.item_id || '').toLowerCase();
+        const s3 = (r.part_no || '').toLowerCase();
+        return s1.includes(q) || s2.includes(q) || s3.includes(q);
+      });
+    }
+
+    rows.sort((a,b) => (b.qty||0) - (a.qty||0) || String(a.name||'').localeCompare(String(b.name||'')));
+
+    tbody.innerHTML = '';
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+
+      const td1 = document.createElement('td');
+      td1.innerHTML = `
+        <div class="name">${escapeHtml(r.name || '(名称なし)')}</div>
+        <div class="small">${escapeHtml(r.item_id)}${r.part_no ? ' / ' + escapeHtml(r.part_no) : ''}</div>
+      `;
+
+      const td2 = document.createElement('td');
+      td2.className = 'num';
+      td2.textContent = formatNum(r.qty || 0);
+
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      tbody.appendChild(tr);
+    });
+
+    tbl.style.display = 'table';
+
+    hideMsg();
+    show('ok', `表示：${rows.length}件 / 品種=${kind || '全て'}${q ? ' / 検索="' + q + '"' : ''}`);
+  }
+
+  function formatNum(n){
+    try { return Number(n).toLocaleString('ja-JP'); } catch(e){ return String(n); }
+  }
+  function escapeHtml(s){
+    return String(s||'')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function buildKindOptions(){
+    const kinds = [...new Set(masters.map(m => m.kind).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    kindSelect.innerHTML = '';
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = '（全て）';
+    kindSelect.appendChild(opt0);
+
+    kinds.forEach(k => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = k;
+      kindSelect.appendChild(o);
+    });
+
+    quickChips.innerHTML = '';
+    kinds.slice(0, 6).forEach(k => {
+      const d = document.createElement('div');
+      d.className = 'chip';
+      d.textContent = k;
+      d.onclick = () => { kindSelect.value = k; render(); };
+      quickChips.appendChild(d);
+    });
+
+    kindSelect.onchange = () => render();
+  }
+
+  function loadAll(){
+    show('ok', 'データ取得中...');
+    google.script.run
+      .withSuccessHandler(res => {
+        masters = res?.masters || [];
+        stocks  = res?.stocks  || [];
+
+        buildKindOptions();
+        render();
+      })
+      .withFailureHandler(err => {
+        show('err', '取得に失敗: ' + (err?.message || err));
+      })
+      .getStockViewData();
+  }
+
+  document.getElementById('btnReload').onclick = () => loadAll();
+  document.getElementById('btnClear').onclick = () => {
+    qInput.value = '';
+    kindSelect.value = '';
+    render();
+  };
+  document.getElementById('btnBack').onclick = () => navTo('main');
+  qInput.addEventListener('input', () => render());
+
+  loadAll();
+</script>
+</body>
+</html>

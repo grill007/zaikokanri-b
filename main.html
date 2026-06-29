@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>在庫管理B スキャン</title>
+
+  <style>
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;margin:0;padding:14px;background:#f6f7f9}
+    .card{max-width:560px;margin:10px auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 6px 16px rgba(0,0,0,.06)}
+    .row{display:flex;gap:10px}
+    .row>*{flex:1}
+    button{width:100%;padding:12px 14px;border-radius:12px;border:none;font-size:18px;font-weight:900;cursor:pointer}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .btn-sub{background:#e5e7eb;color:#111}
+    .btn-primary{background:#111;color:#fff}
+    .btn-in{background:#0f766e;color:#fff}
+    .btn-out{background:#b91c1c;color:#fff}
+    .msg{margin-top:12px;padding:10px 12px;border-radius:12px;font-size:15px}
+    .msg.err{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;white-space:pre-wrap}
+    .msg.ok{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#eef2ff;font-size:14px;color:#3730a3;font-weight:800}
+    .muted{color:#666;font-size:13px}
+    .videoWrap{border-radius:14px;overflow:hidden;background:#000;border:1px solid #e5e7eb;margin-top:10px}
+    #video{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+    .qrBox{margin-top:12px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#fff}
+    .qrVal{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:14px;word-break:break-all}
+    .statusBox{margin-top:8px;padding:8px 10px;border-radius:10px;background:#f8fafc;border:1px solid #e5e7eb;font-size:13px;color:#111;white-space:pre-wrap}
+    .lastBox{margin-top:12px;padding:10px 12px;border:1px solid #d1fae5;border-radius:12px;background:#f0fdf4}
+    .lastTitle{font-size:13px;color:#065f46;font-weight:900}
+    .lastLine{margin-top:4px;font-size:14px;color:#111;word-break:break-all}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #e5e7eb;font-size:16px;box-sizing:border-box}
+    label{display:block;margin-top:12px;font-weight:800}
+  </style>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+</head>
+
+<body>
+  <div style="position:fixed;top:4px;right:6px;z-index:9999;font-size:12px;color:#666;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 6px;" id="versionLabel">github-pages-b-2026-06-26-01</div>
+  <div class="card">
+    <div class="row" style="align-items:center;">
+      <div class="pill">作業者：<span id="workerText">確認中…</span></div>
+      <button id="btnChangeWorker" class="btn-sub" style="max-width:180px;">作業者変更</button>
+    </div>
+
+    <div id="err" class="msg err" style="display:none;"></div>
+    <div id="ok" class="msg ok" style="display:none;"></div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="goQrBtn" class="btn-primary" type="button">QR発行へ</button>
+      <button id="goStockBtn" class="btn-sub" type="button">在庫確認へ</button>
+    </div>
+
+    <div id="dbg" class="muted" style="margin-top:12px;"></div>
+
+    <div class="videoWrap">
+      <video id="video" playsinline muted></video>
+    </div>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnCam" class="btn-primary" type="button">カメラ開始</button>
+      <button id="btnStop" class="btn-sub" type="button" disabled>停止</button>
+    </div>
+
+    <div class="qrBox">
+      <div class="muted">読み取り結果</div>
+      <div class="qrVal" id="qrText">（未読み取り）</div>
+      <div id="assetStatus" class="statusBox" style="display:none;"></div>
+    </div>
+
+    <div id="lastRecord" class="lastBox" style="display:none;">
+      <div class="lastTitle">直近登録</div>
+      <div id="lastSummary" class="lastLine"></div>
+      <div id="lastLogId" class="lastLine mono"></div>
+      <button id="copyLogIdBtn" class="btn-sub" type="button" style="margin-top:10px;font-size:15px;padding:10px 12px;">log_idをコピー</button>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="btnSound" class="btn-sub" type="button">🔈 音: ON</button>
+      <button id="btnVibe" class="btn-sub" type="button">📳 バイブ: OFF</button>
+    </div>
+    <div class="muted" style="margin-top:6px;">
+      ※誤読対策：1回一致で確定 + 1秒クールダウン
+    </div>
+
+    <label for="location">ロケーション（任意）</label>
+    <input id="location" placeholder="例：棚A-02">
+
+    <label for="note">メモ（任意）</label>
+    <input id="note" placeholder="例：至急、返品など">
+
+    <div class="row" style="margin-top:14px;">
+      <button id="btnIn" class="btn-in" type="button" disabled>入庫</button>
+      <button id="btnOut" class="btn-out" type="button" disabled>出庫</button>
+    </div>
+
+    <div class="muted" style="margin-top:10px;">
+      ※「カメラ開始」→QRを読み取り→「入庫／出庫」
+    </div>
+  </div>
+
+<script>
+(() => {
+  const LS_KEY = 'inventory_worker';
+  const SOUND_KEY = 'inv_sound_on';
+  const VIBE_KEY  = 'inv_vibe_on';
+
+  const workerText = document.getElementById('workerText');
+  const errBox = document.getElementById('err');
+  const okBox = document.getElementById('ok');
+  const dbg = document.getElementById('dbg');
+
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  const btnCam = document.getElementById('btnCam');
+  const btnStop = document.getElementById('btnStop');
+  const btnChangeWorker = document.getElementById('btnChangeWorker');
+  const goQrBtn = document.getElementById('goQrBtn');
+  const goStockBtn = document.getElementById('goStockBtn');
+
+  const btnIn = document.getElementById('btnIn');
+  const btnOut = document.getElementById('btnOut');
+  const locationInput = document.getElementById('location');
+  const noteInput = document.getElementById('note');
+  const assetStatus = document.getElementById('assetStatus');
+  const lastRecord = document.getElementById('lastRecord');
+  const lastSummary = document.getElementById('lastSummary');
+  const lastLogId = document.getElementById('lastLogId');
+  const copyLogIdBtn = document.getElementById('copyLogIdBtn');
+
+  const btnSound = document.getElementById('btnSound');
+  const btnVibe  = document.getElementById('btnVibe');
+
+  dbg.textContent = 'page: main / ' + location.href;
+
+  window.addEventListener('error', (e) => showErr('JS Error: ' + (e.message || e)));
+  window.addEventListener('unhandledrejection', (e) => showErr('Promise Error: ' + (e.reason?.message || e.reason || e)));
+
+  function showErr(msg){ errBox.style.display='block'; okBox.style.display='none'; errBox.textContent=String(msg||''); }
+  function showOk(msg){ okBox.style.display='block'; errBox.style.display='none'; okBox.textContent=String(msg||''); }
+  function clearMsg(){ errBox.style.display='none'; okBox.style.display='none'; }
+
+  function getSavedWorker(){
+    try{ return JSON.parse(localStorage.getItem(LS_KEY) || 'null'); }catch(e){ return null; }
+  }
+  function saveWorker(w){ localStorage.setItem(LS_KEY, JSON.stringify(w)); }
+  function clearWorker(){ localStorage.removeItem(LS_KEY); }
+
+  // ===== 作業者 =====
+  let workerCode = '';
+  let lastLogIdValue = '';
+  let currentCanIn = false;
+  let currentCanOut = false;
+  let statusRequestSeq = 0;
+
+  (function initWorker(){
+    const params = new URL(location.href).searchParams;
+    const fromQuery = params.get('worker_code');
+    const saved = getSavedWorker();
+    const wc = fromQuery || saved?.code || '';
+
+    if (!wc) {
+      showErr('作業者情報がありません。ログインしてください。');
+      setTimeout(()=>navTo('index'), 500);
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res || !res.ok) {
+          showErr(res?.message || '作業者確認に失敗しました。');
+          clearWorker();
+          setTimeout(()=>navTo('index'), 600);
+          return;
+        }
+        workerCode = res.worker.code;
+        workerText.textContent = `${res.worker.code} ${res.worker.name}`;
+        saveWorker({code: res.worker.code, name: res.worker.name});
+        showOk('作業者確認OK');
+      })
+      .withFailureHandler(err => showErr('サーバーエラー: ' + (err?.message || err)))
+      .validateWorkerCode(wc);
+  })();
+
+  btnChangeWorker.onclick = () => { clearWorker(); navTo('index'); };
+  goQrBtn.onclick = () => {
+    const w = getSavedWorker();
+    if (!w?.code) { showErr('作業者情報がありません。ログインしてください。'); setTimeout(()=>navTo('index'), 500); return; }
+    navTo('qr', { worker_code: w.code });
+  };
+  goStockBtn.onclick = () => navTo('stock');
+
+  // ===== 音・バイブ =====
+  let soundOn = (localStorage.getItem(SOUND_KEY) ?? '1') === '1';
+  let vibeOn  = (localStorage.getItem(VIBE_KEY)  ?? '0') === '1';
+
+  function refreshFeedbackButtons(){
+    btnSound.textContent = `🔈 音: ${soundOn ? 'ON' : 'OFF'}`;
+    btnVibe.textContent  = `📳 バイブ: ${vibeOn ? 'ON' : 'OFF'}`;
+  }
+  refreshFeedbackButtons();
+
+  let audioCtx = null;
+  async function warmupAudio_(){
+    try{
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+    }catch(e){}
+  }
+  async function beep_(){
+    if (!soundOn) return;
+    try{
+      await warmupAudio_();
+      if (!audioCtx) return;
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 1200;
+      g.gain.value = 0.05;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start();
+      setTimeout(() => { try{o.stop();}catch(e){} }, 90);
+    }catch(e){}
+  }
+  function vibrate_(){
+    if (!vibeOn) return;
+    if (navigator.vibrate) navigator.vibrate(60);
+  }
+
+  btnSound.onclick = async () => { soundOn = !soundOn; localStorage.setItem(SOUND_KEY, soundOn ? '1':'0'); refreshFeedbackButtons(); if (soundOn) await warmupAudio_(); };
+  btnVibe.onclick  = () => { vibeOn = !vibeOn; localStorage.setItem(VIBE_KEY, vibeOn ? '1':'0'); refreshFeedbackButtons(); };
+
+  copyLogIdBtn.onclick = async () => {
+    if (!lastLogIdValue) return;
+    try {
+      await navigator.clipboard.writeText(lastLogIdValue);
+      showOk('log_idをコピーしました: ' + lastLogIdValue);
+    } catch (e) {
+      showOk('log_id: ' + lastLogIdValue);
+    }
+  };
+
+  // ===== カメラ・スキャン =====
+  let stream = null;
+  let scanning = false;
+
+  const COOLDOWN_MS = 1000;
+  const CONFIRM_HITS = 1;
+  let cooldownUntil = 0;
+  let candidateValue = '';
+  let candidateHits = 0;
+  let lastValue = '';
+
+  function applyActionButtons(){
+    btnIn.disabled = !lastValue || !currentCanIn;
+    btnOut.disabled = !lastValue || !currentCanOut;
+  }
+  function showAssetStatus(text){
+    assetStatus.style.display = 'block';
+    assetStatus.textContent = String(text || '');
+  }
+  function setQrValue(v){
+    lastValue = v;
+    document.getElementById('qrText').textContent = v;
+    currentCanIn = false;
+    currentCanOut = false;
+    applyActionButtons();
+    loadAssetStatus(v);
+  }
+  function resetAfterRecord(){
+    lastValue = '';
+    candidateValue = '';
+    candidateHits = 0;
+    cooldownUntil = 0;
+    currentCanIn = false;
+    currentCanOut = false;
+    document.getElementById('qrText').textContent = '（未読み取り）';
+    assetStatus.style.display = 'none';
+    applyActionButtons();
+  }
+
+  function loadAssetStatus(qrValue){
+    const seq = ++statusRequestSeq;
+    showAssetStatus('個体状態を確認中...');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        if (seq !== statusRequestSeq) return;
+        if (!res || !res.ok) {
+          currentCanIn = false;
+          currentCanOut = false;
+          applyActionButtons();
+          showAssetStatus(res?.message || '個体状態を取得できませんでした。');
+          return;
+        }
+
+        currentCanIn = Boolean(res.can_in);
+        currentCanOut = Boolean(res.can_out);
+        applyActionButtons();
+
+        const latest = res.latest_action ? res.latest_action : 'なし';
+        const locationText = res.last_location ? `\n場所: ${res.last_location}` : '';
+        const actions = [currentCanIn ? '入庫' : '', currentCanOut ? '出庫' : ''].filter(Boolean).join(' / ');
+        const actionText = `操作可能: ${actions || 'なし'}`;
+        showAssetStatus(
+          `asset: ${res.asset_id}\n` +
+          `item: ${res.item_id} ${res.item_name || ''}\n` +
+          `status: ${res.status} / 最新: ${latest}${locationText}\n` +
+          actionText +
+          (res.message ? `\n${res.message}` : '')
+        );
+      })
+      .withFailureHandler(err => {
+        if (seq !== statusRequestSeq) return;
+        currentCanIn = false;
+        currentCanOut = false;
+        applyActionButtons();
+        showAssetStatus('個体状態の取得に失敗: ' + (err?.message || err));
+      })
+      .getAssetStatus(qrValue);
+  }
+
+  function showLastRecord(res, action){
+    lastLogIdValue = String(res?.log_id || '').trim();
+    lastSummary.textContent = `${action} / asset=${res?.asset_id || ''} / item=${res?.item_id || ''}` + (res?.became_active ? ' / active化' : '');
+    lastLogId.textContent = lastLogIdValue ? `取消用 log_id: ${lastLogIdValue}` : 'log_id: （未返却）';
+    copyLogIdBtn.disabled = !lastLogIdValue;
+    lastRecord.style.display = 'block';
+  }
+
+  function stopCamera(){
+    scanning = false;
+    btnCam.disabled = false;
+    btnStop.disabled = true;
+    if (stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    showOk('停止しました');
+  }
+
+  async function startCamera(){
+    clearMsg();
+    showOk('カメラ準備中...');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showErr('このブラウザはカメラAPI(getUserMedia)に対応していません。');
+      return;
+    }
+    if (typeof jsQR !== 'function') {
+      showErr('jsQRが読み込めていません（headのscriptタグを確認）');
+      return;
+    }
+
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      await video.play();
+
+      scanning = true;
+      btnCam.disabled = true;
+      btnStop.disabled = false;
+
+      showOk('カメラ開始。QRを写してください。');
+      requestAnimationFrame(scanLoop);
+    }catch(e){
+      showErr('カメラ開始失敗: ' + (e?.message || e));
+    }
+  }
+
+  function scanLoop(){
+    if (!scanning) return;
+
+    try{
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+
+      if (w && h){
+        canvas.width = w;
+        canvas.height = h;
+        ctx.drawImage(video, 0, 0, w, h);
+
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const result = jsQR(imageData.data, w, h, { inversionAttempts: 'attemptBoth' });
+
+        if (result?.data){
+          const v = String(result.data).trim();
+          const now = Date.now();
+
+          if (now >= cooldownUntil){
+            if (v === candidateValue) candidateHits++;
+            else { candidateValue = v; candidateHits = 1; }
+
+            if (candidateHits >= CONFIRM_HITS && v !== lastValue){
+              setQrValue(v);
+              cooldownUntil = now + COOLDOWN_MS;
+              candidateHits = 0;
+              beep_(); vibrate_();
+              showOk('読み取り: ' + v);
+            }
+          }
+        }
+      }
+    }catch(e){
+      showErr('読み取りエラー: ' + (e?.message || e));
+    }
+
+    requestAnimationFrame(scanLoop);
+  }
+
+  btnCam.onclick = () => startCamera();
+  btnStop.onclick = () => stopCamera();
+
+  // ===== 入出庫 =====
+  function record(action){
+    if (!lastValue) { showErr('先にQRを読み取ってください'); return; }
+    if (!workerCode) { showErr('作業者確認が完了していません。少し待つか再ログインしてください。'); return; }
+
+    btnIn.disabled = true;
+    btnOut.disabled = true;
+
+    const payload = {
+      action,
+      qr_value: lastValue,
+      worker_code: workerCode,
+      location: (locationInput.value || '').trim(),
+      note: (noteInput.value || '').trim()
+    };
+
+    google.script.run
+      .withSuccessHandler(res=>{
+        if(!res || !res.ok){
+          applyActionButtons();
+          showErr(res?.message || '記録に失敗しました。');
+          return;
+        }
+
+        showOk(`${action} 登録OK / asset=${res.asset_id} item=${res.item_id}` + (res.became_active ? '（active化）' : ''));
+        showLastRecord(res, action);
+        beep_(); vibrate_();
+        resetAfterRecord();
+      })
+      .withFailureHandler(err=>{
+        applyActionButtons();
+        showErr('サーバーエラー: ' + (err?.message || err));
+      })
+      .recordMovement(payload);
+  }
+
+  btnIn.onclick  = () => record('IN');
+  btnOut.onclick = () => record('OUT');
+})();
+</script>
+</body>
+</html>
