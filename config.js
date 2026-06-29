@@ -6,7 +6,7 @@ window.ZAIKO_B_CONFIG = {
 
   // GAS（zaikokanri_b）のウェブアプリURL（/execで終わるURL）を設定してください。
   // 例: https://script.google.com/macros/s/AKfycb.../exec
-  gasWebAppUrl: 'https://script.google.com/macros/s/AKfycbxKVDWvmuwnAdMmNlDgfT8e3EdRf0hx061TxUw7cl5W54uJXvGE5m2i78AoXC3WZucc/exec,
+  gasWebAppUrl: 'https://script.google.com/macros/s/AKfycbxKVDWvmuwnAdMmNlDgfT8e3EdRf0hx061TxUw7cl5W54uJXvGE5m2i78AoXC3WZucc/exec',
 
   // GAS側 gas_jsonp_extension.gs の API_TOKEN と同じ値を設定します。不要なら空文字。
   // JSONPはGETのため、トークンはURLに含まれます（強い秘匿性はありません）。
